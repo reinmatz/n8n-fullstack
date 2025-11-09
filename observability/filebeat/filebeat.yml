@@ -1,0 +1,76 @@
+filebeat.inputs:
+  # Docker container logs via container input
+  - type: container
+    enabled: true
+    paths:
+      - '/var/lib/docker/containers/*/*.log'
+      - '/var/lib/docker/containers/*/*-json.log'
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+      - decode_json_fields:
+          fields: ["message"]
+          target: ""
+          overwrite_keys: true
+          process_array: false
+          max_depth: 1
+
+  # n8n specific logs (if available)
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/n8n/*.log
+    fields:
+      service: n8n
+      type: application
+    fields_under_root: true
+    ignore_older: 24h
+
+  # Qdrant logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/qdrant/*.log
+    fields:
+      service: qdrant
+      type: database
+    fields_under_root: true
+    ignore_older: 24h
+
+# Add cloud/container metadata
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+  - add_kubernetes_metadata: ~
+
+# Output to Elasticsearch
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "filebeat-%{[agent.version]}-%{+yyyy.MM.dd}"
+
+# Template settings
+setup.template.name: "filebeat"
+setup.template.pattern: "filebeat-*"
+setup.template.enabled: true
+setup.template.overwrite: false
+
+# ILM disabled for custom index naming
+setup.ilm.enabled: false
+
+# Kibana endpoint for dashboards
+setup.kibana:
+  host: "kibana:5601"
+
+# Enable Kibana dashboards
+setup.dashboards.enabled: true
+
+# Logging
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644

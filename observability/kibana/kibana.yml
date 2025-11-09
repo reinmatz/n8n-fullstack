@@ -1,0 +1,10 @@
+server.host: "0.0.0.0"
+server.publicBaseUrl: "http://localhost:5601"
+
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+
+# Encryption key for saved objects
+xpack.encryptedSavedObjects.encryptionKey: "a7a6311933d3503b89bc2dbc36572c33a6c10925682e591bffcab6911c06786d"
+
+# Logging
+logging.root.level: warn

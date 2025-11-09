@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose:*)",
+      "Bash(curl:*)",
+      "Bash(docker network inspect:*)",
+      "Bash(for port in \"qdrant 6333\" \"ollama 11434\" \"docling 5001\" \"elasticsearch 9200\" \"grafana 3000\" \"prometheus 9090\")",
+      "Bash(do docker compose exec -T n8n sh -c \"nc -zv $port 2>&1\")",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(for service in \"loki 3100\" \"promtail 9080\")",
+      "Bash(do echo -n \"$service: \")",
+      "Bash(timeout 60 curl:*)",
+      "Bash(for service in \"n8n\" \"qdrant/collections\" \"kibana\" \"grafana\")",
+      "Bash(for service in \"n8n/\" \"kibana/\" \"grafana/\")",
+      "Bash(cat:*)",
+      "Bash(python3:*)",
+      "mcp__MCP_DOCKER__web_search_exa",
+      "Bash(git reset:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

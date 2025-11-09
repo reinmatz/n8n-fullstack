@@ -1,0 +1,64 @@
+# Environment variables
+.env
+
+# Data directories (persistent volumes)
+data/
+!data/.gitkeep
+
+# Observability data and runtime files
+observability/*/data/
+observability/**/*-logs/
+observability/prometheus/01*/
+observability/prometheus/*.json
+observability/prometheus/*.db
+observability/prometheus/data/
+observability/prometheus/wal/
+observability/prometheus/chunks_head/
+observability/prometheus/lock
+observability/prometheus/queries.active
+observability/grafana/*.db
+observability/grafana/*.db.*
+observability/grafana/plugins/
+observability/loki/chunks/
+observability/loki/wal/
+observability/loki/tsdb-*/
+observability/tempo/wal/
+observability/tempo/blocks/
+observability/elasticsearch/
+observability/filebeat-data/
+observability/kibana-data/
+observability/kibana-data.backup/
+
+# Shared files
+shared/*
+!shared/.gitkeep
+
+# Web certificates and cache
+web/certs/
+web/cache/
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backups
+*.tar.gz
+*.zip
+backups/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

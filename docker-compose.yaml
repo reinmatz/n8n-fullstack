@@ -1,0 +1,339 @@
+version: "3.9"
+
+networks:
+  rag-net:
+    driver: bridge
+
+x-env-common: &env-common
+  TZ: Europe/Berlin
+
+x-logging: &json-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+      - ollama
+      - docling
+      - postgres
+    ports:
+      - "5678:5678"
+    environment:
+      <<: *env-common
+      N8N_HOST: "localhost"
+      N8N_PORT: 5678
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: "${N8N_USER:-admin}"
+      N8N_BASIC_AUTH_PASSWORD: "${N8N_PASSWORD:-admin}"
+      N8N_PROTOCOL: "http"
+      N8N_EDITOR_BASE_URL: "http://localhost:5678"
+      WEBHOOK_URL: "http://localhost:5678/webhook"
+      N8N_PATH: "/"
+      GENERIC_TIMEZONE: "Europe/Berlin"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: "all"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: "none"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "336"
+      N8N_METRICS: "true"
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+      - ./workflows:/data/workflows
+      - ./shared:/data/shared
+      - ./observability/n8n-logs:/var/log/n8n
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  docling:
+    image: quay.io/docling-project/docling-serve:latest
+    container_name: docling
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      <<: *env-common
+      DOCLING_SERVE_ENABLE_UI: "1"
+    volumes:
+      - ./data/docling/cache:/root/.cache/docling
+      - ./data/docling/ocr_cache:/root/.cache/ocr
+      - ./shared:/data/shared
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      <<: *env-common
+      POSTGRES_DB: n8n_chat_history
+      POSTGRES_USER: "${POSTGRES_USER:-n8n}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-n8n_secure_password}"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./observability/postgres-logs:/var/log/postgresql
+    networks:
+      - rag-net
+    logging: *json-logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n} -d n8n_chat_history"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command:
+      - "postgres"
+      - "-c"
+      - "logging_collector=on"
+      - "-c"
+      - "log_directory=/var/log/postgresql"
+      - "-c"
+      - "log_filename=postgresql-%Y-%m-%d.log"
+      - "-c"
+      - "log_statement=all"
+      - "-c"
+      - "log_min_duration_statement=100"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      <<: *env-common
+    volumes:
+      - ./data/qdrant/storage:/qdrant/storage
+      - ./data/qdrant/snapshots:/qdrant/snapshots
+      - ./observability/qdrant-logs:/var/log/qdrant
+      - ./observability/qdrant-config.yaml:/qdrant/config/config.yaml:ro
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    environment:
+      <<: *env-common
+      OLLAMA_HOST: "0.0.0.0"
+    volumes:
+      - ./data/ollama:/root/.ollama
+      - ./shared:/data/shared
+    networks:
+      - rag-net
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - capabilities: ["gpu"]
+#              driver: nvidia
+#              count: "all"
+    logging: *json-logging
+
+  # Observability
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus:/etc/prometheus
+      - ./observability/prometheus:/prometheus
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *env-common
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+      GF_SERVER_ROOT_URL: "http://localhost:3000"
+    volumes:
+      - ./observability/grafana:/var/lib/grafana
+      - ./observability/grafana-provisioning:/etc/grafana/provisioning
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./observability/loki/config.yaml:/etc/loki/config.yaml:ro
+      - ./observability/loki:/loki
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./observability/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observability/n8n-logs:/var/log/n8n:ro
+      - ./observability/qdrant-logs:/var/log/qdrant:ro
+      - ./observability/postgres-logs:/var/log/postgresql:ro
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    restart: unless-stopped
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    command: -config.file=/etc/tempo/config.yaml
+    volumes:
+      - ./observability/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - ./observability/tempo:/var/tempo
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  # cAdvisor für Container-Metriken
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  # Elasticsearch Exporter für Prometheus
+  elasticsearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:latest
+    container_name: elasticsearch-exporter
+    restart: unless-stopped
+    command:
+      - '--es.uri=http://elasticsearch:9200'
+      - '--es.all'
+      - '--es.indices'
+      - '--es.timeout=30s'
+    ports:
+      - "9114:9114"
+    depends_on:
+      - elasticsearch
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-n8n}:${POSTGRES_PASSWORD:-n8n_secure_password}@postgres:5432/n8n_chat_history?sslmode=disable"
+    ports:
+      - "9187:9187"
+    depends_on:
+      - postgres
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  # Elasticsearch + Kibana (aktiviert)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - ./observability/elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    container_name: kibana
+    restart: unless-stopped
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=a7a6311933d3503b89bc2dbc36572c33a6c10925682e591bffcab6911c06786d
+      - SERVER_PUBLICBASEURL=http://localhost:5601
+      - LOGGING_ROOT_LEVEL=error
+      - SERVER_HOST=0.0.0.0
+    volumes:
+      - ./observability/kibana-data:/usr/share/kibana/data
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - rag-net
+    logging: *json-logging
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.15.3
+    container_name: filebeat
+    restart: unless-stopped
+    user: root
+    environment:
+      <<: *env-common
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+      KIBANA_HOST: "http://kibana:5601"
+    volumes:
+      - ./observability/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observability/n8n-logs:/var/log/n8n:ro
+      - ./observability/qdrant-logs:/var/log/qdrant:ro
+      - ./observability/filebeat-data:/usr/share/filebeat/data
+      - ./observability/filebeat-logs:/var/log/filebeat
+    command: filebeat -e -strict.perms=false
+    depends_on:
+      - elasticsearch
+      - kibana
+    networks:
+      - rag-net
+    logging: *json-logging

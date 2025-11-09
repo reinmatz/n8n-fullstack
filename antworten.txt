@@ -1,0 +1,52 @@
+
+Ziele und Rahmen
+    a. docker-compose.yml neu erstellen alle Container mit neu zu erstellenden Netzwerk verbindn.
+    b. Persistenz - bind mounts 
+
+Ingestion und Parsing
+    a. pdf docx xlsx nutzen docling
+       md txt ohne docling
+    b. max 5Mb
+    c. Json
+
+Chunking-Strategie
+    a. semantisches Chunking
+    b. geringer Halluzinationen größere kontextuelle Chunks
+    c. ja, pdf docx page-aware Chunking in Metadaten
+
+Embeddings und Modelle (Ollama)
+    a. ein deutsch-optimiertes Modelle
+    b. Das beste Modell verwendnen das in einer 12GB Nvidia GPU (4070Ti) läuft
+
+Vektor-Datenbank (lokal, Docker)
+    a. die zur Zeit beste Option nutzen
+    b. filter auf Metadaten, Snapshot u. Backups, Arm64 Apple M Prozessoren x386 Support
+
+Retrieval + RAG-Workflow
+    a. Reranking (lokales Cross-Encoder/Reranker-Modell via Ollama/TEI)
+    b. obtimale variante wählen
+    c. Seiten-Referenzen im chat-output erforderlich
+
+Frontend und Integrationspfad
+    a. Frontend n8n Formular + Webhook + WebUI 
+    b. BasicAuth
+
+Betrieb, Observability, Sicherheit
+    a. mit Prometheus/Grafana + Loki/Tempo und mit Elastic ergänzen
+    b. PII Filter anwenden und bei Verstoß rückmelden
+    c. nach bester Praxis umsetzen
+
+Datenmodell und Metadaten
+    a. Gewünschte Metadaten-Felder pro Chunk: document_id, filename, page_number, section, chunk_index, hash, created_at, tags, source_url
+    b. Duplicate-Detection (content hash) und Upserts mit Versionsfeldern sollen aktiv sein
+
+Deployment-Ziel
+    a. macOS M1 CPU (dev), Windows Nvidia GPU (test), Linux Nvidia A6000 GPU (prod)
+
+
+Zusazinformationen
+    a. für den Ablaufplan und die Umsetzung soll die lokale N8N Dokumentaion n8n_docs_combined.md verwendet werden.
+    b. für weidere Recherche sollen die angebundenen MCP Server verwendet werden.
+    c. es sollen fertige N8N Workflow Dateine für den N8N Upload bereitestellt werden.
+    d. eine detailierte anleitung für die Bereitstellung des Projekts
+    e. die docker compos Datei soll ausführlich erklärt werden
