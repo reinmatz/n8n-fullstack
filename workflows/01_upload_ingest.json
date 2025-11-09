@@ -84,7 +84,7 @@
     },
     {
       "parameters": {
-        "url": "http://docling:5001/parse",
+        "url": "http://docling:5001/v1/convert/file",
         "method": "POST",
         "sendBinaryData": true,
         "binaryPropertyName": "data",
