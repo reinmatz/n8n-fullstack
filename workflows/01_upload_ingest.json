@@ -1,0 +1,228 @@
+{
+  "name": "01_Upload_Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upload",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "webhook-upload",
+      "name": "Webhook Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "upload-document",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "1",
+          "name": "n8n BasicAuth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// File Validation: MIME type, size limit, format check\nconst MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB\nconst ALLOWED_TYPES = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/markdown', 'text/plain'];\nconst ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.xlsx', '.md', '.txt'];\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const binary = item.binary?.data;\n  \n  if (!binary) {\n    throw new Error('No file uploaded');\n  }\n  \n  const fileName = binary.fileName || 'unknown';\n  const mimeType = binary.mimeType;\n  const fileSize = binary.fileSize || 0;\n  const fileExt = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();\n  \n  // Validate MIME type\n  if (!ALLOWED_TYPES.includes(mimeType)) {\n    throw new Error(`Invalid file type: ${mimeType}. Allowed: PDF, DOCX, XLSX, MD, TXT`);\n  }\n  \n  // Validate extension\n  if (!ALLOWED_EXTENSIONS.includes(fileExt)) {\n    throw new Error(`Invalid file extension: ${fileExt}`);\n  }\n  \n  // Validate size\n  if (fileSize > MAX_FILE_SIZE) {\n    throw new Error(`File too large: ${(fileSize / 1024 / 1024).toFixed(2)}MB. Max: 5MB`);\n  }\n  \n  results.push({\n    json: {\n      fileName,\n      mimeType,\n      fileSize,\n      fileExtension: fileExt,\n      validated: true,\n      validatedAt: new Date().toISOString()\n    },\n    binary: item.binary\n  });\n}\n\nreturn results;"
+      },
+      "id": "validation",
+      "name": "File Validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.fileExtension }}",
+              "operation": "regex",
+              "value2": "\\.(md|txt)$"
+            }
+          ]
+        }
+      },
+      "id": "switch-parser",
+      "name": "Route by File Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Direct parser for MD/TXT files with section detection\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const fileContent = Buffer.from(item.binary.data.data, 'base64').toString('utf8');\n  const fileName = item.json.fileName;\n  \n  // Split by headings (Markdown-style)\n  const sections = [];\n  const lines = fileContent.split('\\n');\n  let currentSection = { title: 'Intro', content: '', level: 0 };\n  \n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n    const headingMatch = line.match(/^(#{1,6})\\s+(.+)$/);\n    \n    if (headingMatch) {\n      // Save previous section\n      if (currentSection.content.trim()) {\n        sections.push({ ...currentSection, lineStart: i - currentSection.content.split('\\n').length, lineEnd: i - 1 });\n      }\n      \n      // Start new section\n      currentSection = {\n        title: headingMatch[2],\n        content: '',\n        level: headingMatch[1].length\n      };\n    } else {\n      currentSection.content += line + '\\n';\n    }\n  }\n  \n  // Add last section\n  if (currentSection.content.trim()) {\n    sections.push({ ...currentSection, lineStart: lines.length - currentSection.content.split('\\n').length, lineEnd: lines.length - 1 });\n  }\n  \n  results.push({\n    json: {\n      fileName,\n      sections,\n      totalSections: sections.length,\n      parsedBy: 'direct',\n      rawContent: fileContent\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "direct-parser",
+      "name": "Direct Parser (MD/TXT)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://docling:5001/parse",
+        "method": "POST",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "docling-parser",
+      "name": "Docling Parser (PDF/DOCX/XLSX)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// PII Filter: Detect and redact sensitive information\nconst items = $input.all();\nconst results = [];\n\n// PII Regex patterns\nconst PII_PATTERNS = {\n  email: /\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b/g,\n  phone: /\\b(\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{3}\\)?[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b/g,\n  iban: /\\b[A-Z]{2}\\d{2}[A-Z0-9]{1,30}\\b/g,\n  creditCard: /\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b/g,\n  ssn: /\\b\\d{3}-\\d{2}-\\d{4}\\b/g\n};\n\nfor (const item of items) {\n  let content = '';\n  let detectedPII = [];\n  \n  // Extract content based on parser type\n  if (item.json.parsedBy === 'direct') {\n    content = item.json.rawContent;\n  } else if (item.json.parsedBy === 'docling') {\n    // Assuming Docling returns structured JSON with text field\n    content = JSON.stringify(item.json);\n  }\n  \n  // Detect PII\n  for (const [type, pattern] of Object.entries(PII_PATTERNS)) {\n    const matches = content.match(pattern);\n    if (matches && matches.length > 0) {\n      detectedPII.push({ type, count: matches.length, samples: matches.slice(0, 2) });\n      // Redact PII\n      content = content.replace(pattern, `[REDACTED_${type.toUpperCase()}]`);\n    }\n  }\n  \n  // If PII detected, log and optionally reject\n  if (detectedPII.length > 0) {\n    console.warn(`PII detected in ${item.json.fileName}:`, detectedPII);\n    // For now, we redact but continue. Set strictMode: true to reject files with PII\n    const strictMode = false;\n    if (strictMode) {\n      throw new Error(`PII detected in file. Upload rejected for security. Types: ${detectedPII.map(p => p.type).join(', ')}`);\n    }\n  }\n  \n  results.push({\n    json: {\n      ...item.json,\n      piiFiltered: true,\n      piiDetected: detectedPII,\n      contentRedacted: detectedPII.length > 0,\n      filteredContent: content\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "pii-filter",
+      "name": "PII Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Semantic Chunking: Use document structure for intelligent chunking\nconst items = $input.all();\nconst results = [];\nconst crypto = require('crypto');\n\nconst CHUNK_OVERLAP = 50; // tokens\nconst MAX_CHUNK_SIZE = 512; // tokens (approximate by word count * 1.3)\n\nfunction estimateTokens(text) {\n  return Math.ceil(text.split(/\\s+/).length * 1.3);\n}\n\nfunction generateHash(content) {\n  return crypto.createHash('sha256').update(content).digest('hex');\n}\n\nfor (const item of items) {\n  const documentId = crypto.randomUUID();\n  const fileName = item.json.fileName;\n  const chunks = [];\n  \n  if (item.json.parsedBy === 'direct') {\n    // Process sections from MD/TXT\n    const sections = item.json.sections || [];\n    \n    for (let i = 0; i < sections.length; i++) {\n      const section = sections[i];\n      const sectionContent = section.content.trim();\n      const sectionTokens = estimateTokens(sectionContent);\n      \n      if (sectionTokens <= MAX_CHUNK_SIZE) {\n        // Section fits in one chunk\n        chunks.push({\n          content: sectionContent,\n          metadata: {\n            document_id: documentId,\n            filename: fileName,\n            page_number: null,\n            section: section.title,\n            chunk_index: i,\n            hash: generateHash(sectionContent),\n            created_at: new Date().toISOString(),\n            tags: [],\n            source_url: null,\n            version: 1\n          }\n        });\n      } else {\n        // Split large section with overlap\n        const words = sectionContent.split(/\\s+/);\n        const wordsPerChunk = Math.floor(MAX_CHUNK_SIZE / 1.3);\n        const overlapWords = Math.floor(CHUNK_OVERLAP / 1.3);\n        \n        for (let start = 0; start < words.length; start += (wordsPerChunk - overlapWords)) {\n          const chunkWords = words.slice(start, start + wordsPerChunk);\n          const chunkContent = chunkWords.join(' ');\n          \n          chunks.push({\n            content: chunkContent,\n            metadata: {\n              document_id: documentId,\n              filename: fileName,\n              page_number: null,\n              section: section.title,\n              chunk_index: chunks.length,\n              hash: generateHash(chunkContent),\n              created_at: new Date().toISOString(),\n              tags: [],\n              source_url: null,\n              version: 1\n            }\n          });\n        }\n      }\n    }\n  } else {\n    // Process Docling output (PDF/DOCX/XLSX)\n    // Assuming Docling returns: { pages: [{page_num, sections: [{heading, content}]}] }\n    const doclingData = item.json.doclingOutput || {};\n    const pages = doclingData.pages || [];\n    \n    for (const page of pages) {\n      const pageNum = page.page_num || null;\n      const sections = page.sections || [];\n      \n      for (const section of sections) {\n        const content = section.content?.trim() || '';\n        if (!content) continue;\n        \n        chunks.push({\n          content,\n          metadata: {\n            document_id: documentId,\n            filename: fileName,\n            page_number: pageNum,\n            section: section.heading || 'Untitled',\n            chunk_index: chunks.length,\n            hash: generateHash(content),\n            created_at: new Date().toISOString(),\n            tags: [],\n            source_url: null,\n            version: 1\n          }\n        });\n      }\n    }\n  }\n  \n  results.push({\n    json: {\n      documentId,\n      fileName,\n      totalChunks: chunks.length,\n      chunks\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "semantic-chunking",
+      "name": "Semantic Chunking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten chunks for batch embedding\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const chunks = item.json.chunks || [];\n  \n  for (const chunk of chunks) {\n    results.push({\n      json: {\n        ...chunk.metadata,\n        content: chunk.content,\n        documentId: item.json.documentId\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "flatten-chunks",
+      "name": "Flatten Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "batch-loop",
+      "name": "Batch Loop (10 chunks)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://ollama:11434/api/embeddings",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'bge-m3',\n  prompt: $json.content\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ollama-embedding",
+      "name": "Ollama Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare Qdrant upsert payload\nconst items = $input.all();\nconst points = [];\nconst crypto = require('crypto');\n\nfor (const item of items) {\n  const embedding = item.json.embedding; // From Ollama response\n  const content = item.json.content;\n  const metadata = {\n    document_id: item.json.document_id,\n    filename: item.json.filename,\n    page_number: item.json.page_number,\n    section: item.json.section,\n    chunk_index: item.json.chunk_index,\n    hash: item.json.hash,\n    created_at: item.json.created_at,\n    tags: item.json.tags || [],\n    source_url: item.json.source_url,\n    version: item.json.version\n  };\n  \n  points.push({\n    id: crypto.randomUUID(),\n    vector: embedding,\n    payload: {\n      content,\n      ...metadata\n    }\n  });\n}\n\nreturn [{ json: { points } }];"
+      },
+      "id": "prepare-upsert",
+      "name": "Prepare Qdrant Upsert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://qdrant:6333/collections/rag_documents/points",
+        "method": "PUT",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  points: $json.points\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "qdrant-upsert",
+      "name": "Qdrant Upsert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  document_id: $('Semantic Chunking').item.json.documentId,\n  filename: $('Semantic Chunking').item.json.fileName,\n  chunks_imported: $('Semantic Chunking').item.json.totalChunks,\n  snapshot_hint: 'Create backup: curl -X POST http://localhost:6333/collections/rag_documents/snapshots',\n  message: 'Document successfully ingested'\n}) }}",
+        "options": {}
+      },
+      "id": "response-success",
+      "name": "Response Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2450, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Upload": {
+      "main": [[{ "node": "File Validation", "type": "main", "index": 0 }]]
+    },
+    "File Validation": {
+      "main": [[{ "node": "Route by File Type", "type": "main", "index": 0 }]]
+    },
+    "Route by File Type": {
+      "main": [
+        [{ "node": "Direct Parser (MD/TXT)", "type": "main", "index": 0 }],
+        [{ "node": "Docling Parser (PDF/DOCX/XLSX)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Direct Parser (MD/TXT)": {
+      "main": [[{ "node": "PII Filter", "type": "main", "index": 0 }]]
+    },
+    "Docling Parser (PDF/DOCX/XLSX)": {
+      "main": [[{ "node": "PII Filter", "type": "main", "index": 0 }]]
+    },
+    "PII Filter": {
+      "main": [[{ "node": "Semantic Chunking", "type": "main", "index": 0 }]]
+    },
+    "Semantic Chunking": {
+      "main": [[{ "node": "Flatten Chunks", "type": "main", "index": 0 }]]
+    },
+    "Flatten Chunks": {
+      "main": [[{ "node": "Batch Loop (10 chunks)", "type": "main", "index": 0 }]]
+    },
+    "Batch Loop (10 chunks)": {
+      "main": [[{ "node": "Ollama Embedding", "type": "main", "index": 0 }], [{ "node": "Response Success", "type": "main", "index": 0 }]]
+    },
+    "Ollama Embedding": {
+      "main": [[{ "node": "Prepare Qdrant Upsert", "type": "main", "index": 0 }]]
+    },
+    "Prepare Qdrant Upsert": {
+      "main": [[{ "node": "Qdrant Upsert", "type": "main", "index": 0 }]]
+    },
+    "Qdrant Upsert": {
+      "main": [[{ "node": "Batch Loop (10 chunks)", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-09T13:00:00.000Z",
+  "versionId": "1.0.0"
+}
