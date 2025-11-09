@@ -36,18 +36,39 @@
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
             {
-              "value1": "={{ $json.fileExtension }}",
-              "operation": "regex",
-              "value2": "\\.(md|txt)$"
+              "id": "md-txt-condition",
+              "leftValue": "={{ $json.fileExtension }}",
+              "rightValue": ".md",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "txt-condition",
+              "leftValue": "={{ $json.fileExtension }}",
+              "rightValue": ".txt",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
-          ]
-        }
+          ],
+          "combineOperation": "any"
+        },
+        "options": {}
       },
       "id": "switch-parser",
       "name": "Route by File Type",
-      "type": "n8n-nodes-base.switch",
+      "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [650, 300]
     },
